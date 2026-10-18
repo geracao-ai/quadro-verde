@@ -214,6 +214,7 @@ function updateCursor() {
 
 window.addEventListener('keydown', (event) => {
   if (event.code === 'Space') {
+    if (event.target.closest && event.target.closest('#link-prompt')) return; // espaço aciona o botão focado
     spaceDown = true;
     event.preventDefault(); // evita "clicar" no botão focado
     updateCursor();
@@ -506,26 +507,8 @@ async function shareBoard() {
 }
 document.getElementById('share').addEventListener('click', shareBoard);
 
-// Carrega o quadro do hash (se houver). Tem prioridade sobre o localStorage.
-async function loadFromHash() {
-  if (!location.hash.startsWith(HASH_PREFIX)) return;
-  const payload = location.hash.slice(HASH_PREFIX.length);
-  const state = await decodeBoard(payload);
-  // Limpa o hash em qualquer caso, para um reload não repetir a pergunta.
-  history.replaceState(null, '', location.pathname + location.search);
-  if (!state && payload[0] === 'z' && typeof DecompressionStream !== 'function') {
-    showToast('Este navegador não consegue abrir links comprimidos (falta DecompressionStream). Use um navegador mais recente.', 8000);
-    return;
-  }
-  if (!state) {
-    showToast('O link do quadro é inválido ou está incompleto.');
-    return;
-  }
-  if (strokes.length > 0) {
-    const same = await encodeBoard({ strokes, camera: state.camera }) ===
-      await encodeBoard({ strokes: state.strokes, camera: state.camera });
-    if (!same && !confirm('Este link contém outro quadro. Substituir o quadro atual pelo do link?')) return;
-  }
+// Aplica um quadro decodificado, substituindo o atual, e salva já.
+function applyBoard(state) {
   discardCurrentStroke();
   strokes.length = 0;
   strokes.push(...state.strokes);
@@ -533,6 +516,83 @@ async function loadFromHash() {
   render();
   flushSave();
   saveToStorage();
+}
+
+function clearHash() {
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
+// Aviso não bloqueante (confirm() é suprimido em muitos navegadores embutidos).
+// Enquanto a pessoa não decide, o hash continua na URL e o quadro do link fica em memória.
+const promptEl = document.getElementById('link-prompt');
+const promptOpenBtn = document.getElementById('link-open');
+const promptKeepBtn = document.getElementById('link-keep');
+let pendingBoard = null;
+
+function showLinkPrompt(state) {
+  pendingBoard = state;
+  promptEl.hidden = false;
+  promptOpenBtn.focus();
+}
+
+function hideLinkPrompt() {
+  pendingBoard = null;
+  promptEl.hidden = true;
+}
+
+promptOpenBtn.addEventListener('click', () => {
+  if (!pendingBoard) return;
+  const state = pendingBoard;
+  hideLinkPrompt();
+  clearHash();
+  applyBoard(state);
+  showToast('Quadro do link aberto.');
+});
+
+function keepLocalBoard() {
+  if (!pendingBoard) return;
+  hideLinkPrompt();
+  clearHash();
+  showToast('Mantive o seu quadro. O quadro do link foi ignorado; abra o link de novo para vê-lo.', 7000);
+}
+promptKeepBtn.addEventListener('click', keepLocalBoard);
+promptEl.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') keepLocalBoard();
+});
+
+// Carrega o quadro do hash (se houver). Tem prioridade sobre o localStorage.
+let hashLoadId = 0;
+async function loadFromHash() {
+  if (!location.hash.startsWith(HASH_PREFIX)) return;
+  const id = ++hashLoadId;
+  const payload = location.hash.slice(HASH_PREFIX.length);
+  const state = await decodeBoard(payload);
+  if (id !== hashLoadId) return; // um link mais novo chegou enquanto decodificava
+  if (!state) {
+    clearHash();
+    hideLinkPrompt();
+    if (payload[0] === 'z' && typeof DecompressionStream !== 'function') {
+      showToast('Este navegador não consegue abrir links comprimidos (falta DecompressionStream). Use um navegador mais recente.', 8000);
+    } else {
+      showToast('O link do quadro é inválido ou está incompleto.');
+    }
+    return;
+  }
+  if (strokes.length > 0) {
+    const same = await encodeBoard({ strokes, camera: state.camera }) ===
+      await encodeBoard({ strokes: state.strokes, camera: state.camera });
+    if (id !== hashLoadId) return;
+    if (same) {
+      hideLinkPrompt();
+      clearHash();
+      return;
+    }
+    showLinkPrompt(state);
+    return;
+  }
+  hideLinkPrompt();
+  clearHash();
+  applyBoard(state);
 }
 window.addEventListener('hashchange', loadFromHash);
 

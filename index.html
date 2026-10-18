@@ -13,6 +13,13 @@
     <button id="clear" type="button">Limpar</button>
   </div>
   <div id="toast" role="status" aria-live="polite" hidden></div>
+  <div id="link-prompt" role="alertdialog" aria-labelledby="link-prompt-text" hidden>
+    <p id="link-prompt-text">Este link contém outro quadro, diferente do que está neste aparelho.</p>
+    <div class="prompt-buttons">
+      <button id="link-open" type="button">Abrir quadro do link</button>
+      <button id="link-keep" type="button">Manter o meu</button>
+    </div>
+  </div>
   <div id="controls" role="group" aria-label="Zoom e navegação">
     <button id="hand" type="button" aria-label="Modo mover" aria-pressed="false" title="Mover (ou espaço + arrastar)">&#9995;</button>
     <button id="zoom-out" type="button" aria-label="Diminuir zoom" title="Diminuir zoom">&minus;</button>
