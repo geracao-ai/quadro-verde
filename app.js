@@ -364,7 +364,10 @@ document.getElementById('clear').addEventListener('click', () => {
 // com pontos em décimos de unidade de mundo (inteiros) e deltas após o primeiro ponto.
 const HASH_PREFIX = '#d=';
 const MAX_URL_LENGTH = 8000;
-const MAX_DECODED_BYTES = 20 * 1024 * 1024;
+const MAX_DECODED_BYTES = 2 * 1024 * 1024; // teto do JSON descomprimido
+const MAX_POINTS = 200000;
+const MAX_STROKES = 20000;
+const MAX_COORD = 1e7 * 10; // |x|, |y| <= 1e7 unidades de mundo (em décimos)
 const Q = 10;
 
 const isInt = (n) => Number.isInteger(n) && Math.abs(n) < 1e9;
@@ -440,20 +443,25 @@ async function encodeBoard(state = { strokes, camera }) {
 async function decodeBoard(text) {
   try {
     if (typeof text !== 'string' || text.length < 1) return null;
+    if (text.length > MAX_DECODED_BYTES * 2) return null; // base64 de algo maior que o teto
     let bytes = fromBase64Url(text.slice(1));
     if (text[0] === 'z') {
       if (typeof DecompressionStream !== 'function') return null;
       bytes = await pipeBytes(bytes, new DecompressionStream('deflate-raw'));
-    } else if (text[0] !== 'r') {
+    } else if (text[0] !== 'r' || bytes.length > MAX_DECODED_BYTES) {
       return null;
     }
     const data = JSON.parse(new TextDecoder().decode(bytes));
     if (!data || data.v !== 1 || !Array.isArray(data.s) || !Array.isArray(data.c)) return null;
     const [cx, cy, cs] = data.c;
     if (![cx, cy, cs].every(isInt) || cs <= 0) return null;
+    if (data.s.length > MAX_STROKES || Math.abs(cx) > MAX_COORD || Math.abs(cy) > MAX_COORD) return null;
     const result = [];
+    let totalPoints = 0;
     for (const flat of data.s) {
       if (!Array.isArray(flat) || flat.length === 0 || flat.length % 2 !== 0) return null;
+      totalPoints += flat.length / 2;
+      if (totalPoints > MAX_POINTS) return null;
       const points = [];
       let x = 0;
       let y = 0;
@@ -461,6 +469,7 @@ async function decodeBoard(text) {
         if (!isInt(flat[i]) || !isInt(flat[i + 1])) return null;
         x += flat[i];
         y += flat[i + 1];
+        if (Math.abs(x) > MAX_COORD || Math.abs(y) > MAX_COORD) return null;
         points.push([x / Q, y / Q]);
       }
       result.push({ points });
@@ -504,6 +513,10 @@ async function loadFromHash() {
   const state = await decodeBoard(payload);
   // Limpa o hash em qualquer caso, para um reload não repetir a pergunta.
   history.replaceState(null, '', location.pathname + location.search);
+  if (!state && payload[0] === 'z' && typeof DecompressionStream !== 'function') {
+    showToast('Este navegador não consegue abrir links comprimidos (falta DecompressionStream). Use um navegador mais recente.', 8000);
+    return;
+  }
   if (!state) {
     showToast('O link do quadro é inválido ou está incompleto.');
     return;

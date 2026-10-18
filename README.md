@@ -41,6 +41,8 @@ O link tem a forma `origem + caminho + #d=<dados>`, e `<dados>` é:
   - `c`: câmera como inteiros: `x` e `y` em décimos de unidade de mundo, `escala` em milésimos.
   - `s`: lista de traços. Cada traço é uma lista plana `x0, y0, dx1, dy1, ...`: o primeiro ponto é absoluto e os seguintes são diferenças em relação ao ponto anterior. Todos os valores são inteiros em décimos de unidade de mundo (precisão de 0,1).
 
+Limites ao abrir um link (acima disso o link é rejeitado como inválido): JSON descomprimido de até 2 MB, 200 mil pontos, 20 mil traços e coordenadas de até 10 milhões de unidades de mundo.
+
 Depois de carregar, o app remove o `#d=...` da barra de endereço.
 
 ## Arquivos
