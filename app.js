@@ -101,16 +101,19 @@ function screenToWorld([x, y]) {
 }
 
 // ---------- Render ----------
-// Gerador pseudoaleatório com semente: a textura do giz fica igual a cada redesenho.
-function seededRandom(seed) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s * 1664525 + 1013904223) >>> 0;
-    return s / 4294967296;
-  };
+// Gerador pseudoaleatório com semente por ponto (derivada das coordenadas de mundo):
+// a textura do giz fica igual a cada redesenho e não muda quando um traço é cortado
+// ou quando outros traços são apagados.
+let randState = 1;
+function random() {
+  randState = (Math.imul(randState, 1664525) + 1013904223) >>> 0;
+  return randState / 4294967296;
+}
+function seedFromPoint(x, y) {
+  return (Math.imul(Math.round(x * 10), 73856093) ^ Math.imul(Math.round(y * 10), 19349663)) >>> 0;
 }
 
-function drawStroke(stroke, index) {
+function drawStroke(stroke) {
   const pts = stroke.points.map(worldToScreen);
   const width = CHALK_WIDTH * camera.scale;
   ctx.lineCap = 'round';
@@ -139,8 +142,9 @@ function drawStroke(stroke, index) {
   }
 
   // Aspereza: falhas (cor do quadro) e grãos de giz espalhados ao longo do traço.
-  const random = seededRandom(index + 1);
-  for (const [x, y] of pts) {
+  for (let k = 0; k < pts.length; k++) {
+    const [x, y] = pts[k];
+    randState = seedFromPoint(stroke.points[k][0], stroke.points[k][1]);
     for (let i = 0; i < 8; i++) {
       const dx = (random() - 0.5) * width * 1.3;
       const dy = (random() - 0.5) * width * 1.3;
@@ -157,7 +161,7 @@ function render() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = BOARD_COLOR;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  strokes.forEach(drawStroke);
+  for (const stroke of strokes) drawStroke(stroke);
 }
 
 // ---------- Redimensionamento (com devicePixelRatio) ----------
@@ -199,18 +203,47 @@ document.getElementById('zoom-in').addEventListener('click', () => setScaleAtCen
 document.getElementById('zoom-out').addEventListener('click', () => setScaleAtCenter(1 / BUTTON_ZOOM));
 document.getElementById('zoom-reset').addEventListener('click', () => setScaleAtCenter(1 / camera.scale));
 
-let handMode = false;
+// ---------- Ferramentas ----------
+const TOOLS = ['chalk', 'hand', 'eraser'];
+const ERASER_RADIUS = 16; // px de tela; convertido para mundo pela escala atual
+let tool = 'chalk';
 let spaceDown = false;
-const handButton = document.getElementById('hand');
-handButton.addEventListener('click', () => {
-  handMode = !handMode;
-  handButton.setAttribute('aria-pressed', String(handMode));
+const toolButtons = {};
+for (const name of TOOLS) toolButtons[name] = document.getElementById('tool-' + name);
+const eraserCursor = document.getElementById('eraser-cursor');
+
+// Espaço pressionado vira mão temporariamente, sem trocar `tool`.
+function effectiveTool() {
+  return spaceDown ? 'hand' : tool;
+}
+
+function setTool(name) {
+  if (!TOOLS.includes(name) || name === tool) return;
+  if (pointers.size > 0) return; // não troca de ferramenta no meio de um gesto
+  tool = name;
+  for (const n of TOOLS) toolButtons[n].setAttribute('aria-pressed', String(n === tool));
   updateCursor();
-});
+}
+for (const name of TOOLS) toolButtons[name].addEventListener('click', () => setTool(name));
+
+const CURSORS = { chalk: 'crosshair', hand: 'grab', eraser: 'none' }; // o apagador usa o círculo
 
 function updateCursor() {
-  canvas.style.cursor = panPointerId !== null ? 'grabbing' : (handMode || spaceDown) ? 'grab' : 'crosshair';
+  canvas.style.cursor = panPointerId !== null ? 'grabbing' : CURSORS[effectiveTool()];
+  if (effectiveTool() !== 'eraser' || panPointerId !== null) eraserCursor.hidden = true;
 }
+
+// Círculo do apagador seguindo o ponteiro (tamanho em px de tela).
+eraserCursor.style.width = eraserCursor.style.height = ERASER_RADIUS * 2 + 'px';
+function moveEraserCursor(event) {
+  const show = effectiveTool() === 'eraser' && panPointerId === null && pointers.size < 2;
+  eraserCursor.hidden = !show;
+  if (show) {
+    eraserCursor.style.transform =
+      `translate(${event.clientX - ERASER_RADIUS}px, ${event.clientY - ERASER_RADIUS}px)`;
+  }
+}
+canvas.addEventListener('pointerleave', () => { if (pointers.size === 0) eraserCursor.hidden = true; });
 
 window.addEventListener('keydown', (event) => {
   if (event.code === 'Space') {
@@ -219,6 +252,14 @@ window.addEventListener('keydown', (event) => {
     event.preventDefault(); // evita "clicar" no botão focado
     updateCursor();
   }
+});
+const SHORTCUTS = { b: 'chalk', g: 'chalk', e: 'eraser', h: 'hand' };
+window.addEventListener('keydown', (event) => {
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  const t = event.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  const name = SHORTCUTS[event.key.toLowerCase()];
+  if (name) setTool(name);
 });
 window.addEventListener('keyup', (event) => {
   if (event.code === 'Space') {
@@ -252,6 +293,8 @@ canvas.addEventListener('wheel', (event) => {
 const pointers = new Map(); // pointerId -> { x, y } em coordenadas de tela
 let strokePointerId = null; // ponteiro que desenha o traço atual
 let panPointerId = null;    // ponteiro que faz pan de 1 dedo/mouse
+let eraserPointerId = null; // ponteiro que está apagando
+let eraserLast = null;      // última posição do apagador (mundo)
 let gesture = null;         // { cx, cy, dist } durante pinça/pan com 2 ponteiros
 
 function pointerPosition(event) {
@@ -276,6 +319,99 @@ function gestureState() {
   };
 }
 
+// ---------- Apagador ----------
+// Corta `pts` removendo o que fica dentro do círculo (cx, cy, r), considerando também
+// o trecho entre pontos: interpola a entrada/saída em cada segmento. Devolve a lista de pedaços.
+function cutPoints(pts, cx, cy, r) {
+  const r2 = r * r;
+  const pieces = [];
+  const p0 = pts[0];
+  let cur = (p0[0] - cx) ** 2 + (p0[1] - cy) ** 2 <= r2 ? null : [p0];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p = pts[i];
+    const q = pts[i + 1];
+    const dx = q[0] - p[0];
+    const dy = q[1] - p[1];
+    const fx = p[0] - cx;
+    const fy = p[1] - cy;
+    const a = dx * dx + dy * dy;
+    const b = 2 * (fx * dx + fy * dy);
+    const c = fx * fx + fy * fy - r2;
+    let lo = 1;
+    let hi = 0; // intervalo [lo, hi] do segmento dentro do círculo; vazio se lo >= hi
+    if (a === 0) {
+      if (c <= 0) { lo = 0; hi = 1; }
+    } else {
+      const disc = b * b - 4 * a * c;
+      if (disc >= 0) {
+        const sq = Math.sqrt(disc);
+        lo = Math.max(0, (-b - sq) / (2 * a));
+        hi = Math.min(1, (-b + sq) / (2 * a));
+      }
+    }
+    if (!(lo < hi)) {
+      if (cur) cur.push(q); else cur = [q];
+      continue;
+    }
+    if (cur) {
+      if (lo > 0) cur.push([p[0] + dx * lo, p[1] + dy * lo]);
+      pieces.push(cur);
+      cur = null;
+    }
+    if (hi < 1) cur = [[p[0] + dx * hi, p[1] + dy * hi], q];
+  }
+  if (cur) pieces.push(cur);
+  return pieces;
+}
+
+// Algum ponto ou segmento do traço toca o círculo? (sem alocar)
+function touchesCircle(pts, cx, cy, r2) {
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    let ex = p[0] - cx;
+    let ey = p[1] - cy;
+    if (ex * ex + ey * ey <= r2) return true;
+    if (i === pts.length - 1) break;
+    const q = pts[i + 1];
+    const dx = q[0] - p[0];
+    const dy = q[1] - p[1];
+    const a = dx * dx + dy * dy;
+    if (a === 0) continue;
+    const t = Math.max(0, Math.min(1, -(ex * dx + ey * dy) / a));
+    ex += t * dx;
+    ey += t * dy;
+    if (ex * ex + ey * ey <= r2) return true;
+  }
+  return false;
+}
+
+function eraseCircle(cx, cy, r) {
+  let changed = false;
+  const r2 = r * r;
+  for (let i = strokes.length - 1; i >= 0; i--) {
+    const pts = strokes[i].points;
+    if (!touchesCircle(pts, cx, cy, r2)) continue;
+    const pieces = cutPoints(pts, cx, cy, r).map((points) => ({ points }));
+    strokes.splice(i, 1, ...pieces);
+    changed = true;
+  }
+  return changed;
+}
+
+// Varre o círculo de `a` até `b` (mundo) em passos de meio raio, para que um movimento
+// rápido não "pule" traços entre dois eventos. Devolve true se algo mudou.
+function eraseSweep(a, b) {
+  const r = ERASER_RADIUS / camera.scale;
+  const dist = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const n = Math.min(2000, Math.max(1, Math.ceil(dist / (r / 2))));
+  let changed = false;
+  for (let i = 1; i <= n; i++) {
+    const t = i / n;
+    if (eraseCircle(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, r)) changed = true;
+  }
+  return changed;
+}
+
 canvas.addEventListener('pointerdown', (event) => {
   if (event.pointerType === 'mouse' && event.button !== 0 && event.button !== 1) return;
   if (event.button === 1) event.preventDefault();
@@ -284,17 +420,34 @@ canvas.addEventListener('pointerdown', (event) => {
 
   if (pointers.size >= 2) {
     // Segundo dedo: vira pinça/pan e o traço de 1 dedo é descartado sem deixar rabisco.
+    // Apagamentos já feitos antes da pinça permanecem (como um traço parcial de apagador);
+    // daqui em diante nenhum dedo apaga até todos serem levantados.
     discardCurrentStroke();
+    eraserPointerId = null;
+    eraserLast = null;
     panPointerId = null;
+    eraserCursor.hidden = true;
     gesture = gestureState();
     updateCursor();
     render();
     return;
   }
 
-  if (event.button === 1 || handMode || spaceDown) {
+  const active = event.button === 1 ? 'hand' : effectiveTool();
+  if (active === 'hand') {
     panPointerId = event.pointerId;
     updateCursor();
+    return;
+  }
+
+  if (active === 'eraser') {
+    eraserPointerId = event.pointerId;
+    eraserLast = pointerPosition(event);
+    moveEraserCursor(event);
+    if (eraseSweep(eraserLast, eraserLast)) {
+      render();
+      scheduleSave();
+    }
     return;
   }
 
@@ -306,7 +459,10 @@ canvas.addEventListener('pointerdown', (event) => {
 
 canvas.addEventListener('pointermove', (event) => {
   const p = pointers.get(event.pointerId);
-  if (!p) return;
+  if (!p) {
+    if (pointers.size === 0) moveEraserCursor(event); // passando o mouse/caneta sem pressionar
+    return;
+  }
   const prevX = p.x;
   const prevY = p.y;
   p.x = event.clientX;
@@ -323,6 +479,19 @@ canvas.addEventListener('pointermove', (event) => {
     panBy(p.x - prevX, p.y - prevY);
     render();
     scheduleSave();
+  } else if (event.pointerId === eraserPointerId) {
+    moveEraserCursor(event);
+    let changed = false;
+    const events = event.getCoalescedEvents ? event.getCoalescedEvents() : [];
+    for (const e of events.length ? events : [event]) {
+      const pos = pointerPosition(e);
+      if (eraseSweep(eraserLast, pos)) changed = true;
+      eraserLast = pos;
+    }
+    if (changed) {
+      render();
+      scheduleSave();
+    }
   } else if (event.pointerId === strokePointerId && currentStroke) {
     // getCoalescedEvents devolve os pontos intermediários, deixando o traço mais fiel.
     const events = event.getCoalescedEvents ? event.getCoalescedEvents() : [];
@@ -341,6 +510,11 @@ function endPointer(event) {
     scheduleSave(); // traços descartados pela pinça já saíram de `strokes`
   }
   if (event.pointerId === panPointerId) panPointerId = null;
+  if (event.pointerId === eraserPointerId) {
+    eraserPointerId = null;
+    eraserLast = null;
+  }
+  if (event.pointerType !== 'mouse' || pointers.size > 0) eraserCursor.hidden = true;
   gesture = pointers.size === 2 ? gestureState() : null;
   // Dedo que sobra depois de uma pinça não desenha nem faz pan até levantar todos.
   updateCursor();
@@ -353,6 +527,7 @@ document.getElementById('clear').addEventListener('click', () => {
   strokes.length = 0;
   currentStroke = null;
   strokePointerId = null;
+  eraserPointerId = null;
   clearTimeout(saveTimer);
   saveTimer = null;
   clearStorage();
@@ -598,5 +773,6 @@ window.addEventListener('hashchange', loadFromHash);
 
 window.addEventListener('resize', resize);
 loadFromStorage();
+updateCursor();
 resize();
 loadFromHash();

@@ -6,9 +6,11 @@ Um quadro verde para desenhar a giz, feito só com HTML, CSS e JavaScript puro (
 
 ## Como usar
 
-- **Desenhar:** clique/toque e arraste sobre o quadro.
+- **Ferramentas:** barra à esquerda com três ícones: giz (escrever, padrão), mão (mover o quadro) e apagador. A ativa fica destacada e o cursor muda conforme a ferramenta. Atalhos: `B` ou `G` giz, `H` mão, `E` apagador (não funcionam com foco em campo de texto).
+- **Desenhar:** com o giz, clique/toque e arraste sobre o quadro.
+- **Apagar:** com o apagador, arraste; um círculo (16 px de tela, convertido pelo zoom atual) mostra a área apagada. Os traços são cortados onde o círculo passa (um traço pode virar dois) e o que fica totalmente coberto some. Se um gesto de pinça (2 dedos) começa durante o apagar, ele cancela o apagar: o que já foi apagado antes da pinça permanece e nenhum dedo apaga até todos serem levantados.
 - **Zoom:** roda do mouse, pinça no celular/trackpad, ou os botões `−`, `100%` e `+` no canto inferior direito.
-- **Mover o quadro:** botão da mão (✋) e arrastar, ou segurar `espaço` (ou o botão do meio do mouse) e arrastar. Com dois dedos, arraste e faça pinça ao mesmo tempo.
+- **Mover o quadro:** ferramenta mão e arrastar, ou segurar `espaço` (ou o botão do meio do mouse) e arrastar; ao soltar, volta à ferramenta anterior. Com dois dedos, arraste e faça pinça ao mesmo tempo.
 - **Limpar:** botão "Limpar" (pede confirmação). Apaga também o que está salvo.
 - **Salvar:** automático no `localStorage` do navegador; ao reabrir a página o desenho volta.
 - **Compartilhar:** botão "Compartilhar" copia um link com o desenho dentro. Se a área de transferência não estiver disponível, o link aparece numa caixa para você copiar. Se o link passar de ~8000 caracteres, o app avisa que ele pode não funcionar em alguns apps ou navegadores.
