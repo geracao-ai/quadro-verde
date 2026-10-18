@@ -148,6 +148,17 @@ window.addEventListener('keyup', (event) => {
   }
 });
 
+// Se a janela perde o foco com espaço pressionado, o keyup nunca chega.
+function releaseSpace() {
+  if (!spaceDown) return;
+  spaceDown = false;
+  updateCursor();
+}
+window.addEventListener('blur', releaseSpace);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') releaseSpace();
+});
+
 canvas.addEventListener('wheel', (event) => {
   event.preventDefault();
   // ctrl+roda (inclui pinça do trackpad) usa delta menor por evento.
@@ -246,7 +257,7 @@ function endPointer(event) {
     strokePointerId = null;
   }
   if (event.pointerId === panPointerId) panPointerId = null;
-  if (pointers.size < 2) gesture = null;
+  gesture = pointers.size === 2 ? gestureState() : null;
   // Dedo que sobra depois de uma pinça não desenha nem faz pan até levantar todos.
   updateCursor();
 }
