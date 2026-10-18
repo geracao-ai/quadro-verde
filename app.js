@@ -2,13 +2,16 @@
 
 const BOARD_COLOR = '#2f5d46';
 const CHALK_COLOR = 'rgba(255, 255, 255, 0.85)';
-const CHALK_WIDTH = 4;
+const CHALK_WIDTH = 4;       // espessura padrão (mundo): traços sem `width` usam este valor
+const MIN_WIDTH = 0.5;       // limites aceitos para a espessura de um traço (unidades de mundo)
+const MAX_WIDTH = 100;
 
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
 
 // ---------- Estado ----------
-// Cada traço: { points: [[x, y], ...] } em coordenadas de MUNDO.
+// Cada traço: { points: [[x, y], ...], width } em coordenadas de MUNDO; `width` é a espessura
+// em unidades de mundo (escala com o zoom). `bbox` é só um cache e nunca é serializado.
 const strokes = [];
 let currentStroke = null;
 
@@ -22,7 +25,7 @@ const SAVE_DELAY_MS = 300;
 // Converte o estado em um objeto JSON-serializável.
 function serialize() {
   return {
-    strokes: strokes.map((s) => ({ points: s.points.map(([x, y]) => [x, y]) })),
+    strokes: strokes.map((s) => ({ points: s.points.map(([x, y]) => [x, y]), width: s.width })),
     camera: { x: camera.x, y: camera.y, scale: camera.scale },
   };
 }
@@ -40,12 +43,42 @@ function deserialize(data) {
     for (const p of s.points) {
       if (!Array.isArray(p) || p.length !== 2 || !isNum(p[0]) || !isNum(p[1])) return null;
     }
-    result.push({ points: s.points.map(([x, y]) => [x, y]) });
+    // `width` é opcional (dados antigos não têm): ausente = padrão; inválida = rejeita; fora da faixa = limita.
+    if (s.width !== undefined && !isNum(s.width)) return null;
+    const width = s.width === undefined ? CHALK_WIDTH : Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, s.width));
+    result.push({ points: s.points.map(([x, y]) => [x, y]), width });
   }
   return {
     strokes: result,
     camera: { x: c.x, y: c.y, scale: Math.min(MAX_SCALE, Math.max(MIN_SCALE, c.scale)) },
   };
+}
+
+// ---------- Tamanhos (espessura do giz e raio do apagador) ----------
+// Cinco presets por ferramenta. Giz: espessura em unidades de MUNDO (escala com o zoom).
+// Apagador: raio em px de TELA (constante em relação ao zoom; convertido para mundo ao apagar).
+const SIZE_PRESETS = {
+  chalk: [2, 4, 7, 11, 16],
+  eraser: [8, 16, 28, 44, 64],
+};
+const DEFAULT_SIZE_INDEX = 1; // = CHALK_WIDTH (4) e raio 16 px, como antes
+const sizeIndex = { chalk: DEFAULT_SIZE_INDEX, eraser: DEFAULT_SIZE_INDEX };
+const SIZES_KEY = 'quadro-verde:sizes';
+
+function saveSizes() {
+  try {
+    localStorage.setItem(SIZES_KEY, JSON.stringify(sizeIndex));
+  } catch (e) { /* segue sem salvar */ }
+}
+
+function loadSizes() {
+  try {
+    const d = JSON.parse(localStorage.getItem(SIZES_KEY));
+    for (const name of ['chalk', 'eraser']) {
+      const i = d && d[name];
+      if (Number.isInteger(i) && i >= 0 && i < SIZE_PRESETS[name].length) sizeIndex[name] = i;
+    }
+  } catch (e) { /* ausente ou inválido: usa o padrão */ }
 }
 
 function saveToStorage() {
@@ -115,7 +148,7 @@ function seedFromPoint(x, y) {
 
 function drawStroke(stroke) {
   const pts = stroke.points.map(worldToScreen);
-  const width = CHALK_WIDTH * camera.scale;
+  const width = (stroke.width ?? CHALK_WIDTH) * camera.scale;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.lineWidth = width;
@@ -142,13 +175,16 @@ function drawStroke(stroke) {
   }
 
   // Aspereza: falhas (cor do quadro) e grãos de giz espalhados ao longo do traço.
+  // Traços grossos ganham mais (e um pouco maiores) grãos para manter a mesma textura.
+  const grains = Math.min(16, Math.max(8, Math.round(width * 0.75)));
+  const grainScale = Math.min(2.5, Math.max(1, width / 8));
   for (let k = 0; k < pts.length; k++) {
     const [x, y] = pts[k];
     randState = seedFromPoint(stroke.points[k][0], stroke.points[k][1]);
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < grains; i++) {
       const dx = (random() - 0.5) * width * 1.3;
       const dy = (random() - 0.5) * width * 1.3;
-      const r = random() * 1.4 + 0.6;
+      const r = (random() * 1.4 + 0.6) * grainScale;
       ctx.fillStyle = random() < 0.7 ? BOARD_COLOR : CHALK_COLOR;
       ctx.globalAlpha = random() < 0.6 ? 0.55 : 0.9;
       ctx.fillRect(x + dx, y + dy, r, r);
@@ -205,12 +241,14 @@ document.getElementById('zoom-reset').addEventListener('click', () => setScaleAt
 
 // ---------- Ferramentas ----------
 const TOOLS = ['chalk', 'hand', 'eraser'];
-const ERASER_RADIUS = 16; // px de tela; convertido para mundo pela escala atual
 let tool = 'chalk';
 let spaceDown = false;
 const toolButtons = {};
 for (const name of TOOLS) toolButtons[name] = document.getElementById('tool-' + name);
 const eraserCursor = document.getElementById('eraser-cursor');
+
+const chalkWidth = () => SIZE_PRESETS.chalk[sizeIndex.chalk];
+const eraserRadius = () => SIZE_PRESETS.eraser[sizeIndex.eraser]; // px de tela
 
 // Espaço pressionado vira mão temporariamente, sem trocar `tool`.
 function effectiveTool() {
@@ -222,6 +260,7 @@ function setTool(name) {
   if (pointers.size > 0) return; // não troca de ferramenta no meio de um gesto
   tool = name;
   for (const n of TOOLS) toolButtons[n].setAttribute('aria-pressed', String(n === tool));
+  updateSizeUI();
   updateCursor();
 }
 for (const name of TOOLS) toolButtons[name].addEventListener('click', () => setTool(name));
@@ -233,21 +272,92 @@ function updateCursor() {
   if (effectiveTool() !== 'eraser' || panPointerId !== null) eraserCursor.hidden = true;
 }
 
-// Círculo do apagador seguindo o ponteiro (tamanho em px de tela).
-eraserCursor.style.width = eraserCursor.style.height = ERASER_RADIUS * 2 + 'px';
+// Círculo do apagador seguindo o ponteiro (tamanho em px de tela, conforme o tamanho escolhido).
+let cursorPos = [0, 0];
+function placeEraserCursor() {
+  const r = eraserRadius();
+  eraserCursor.style.width = eraserCursor.style.height = r * 2 + 'px';
+  eraserCursor.style.transform = `translate(${cursorPos[0] - r}px, ${cursorPos[1] - r}px)`;
+}
 function moveEraserCursor(event) {
   const show = effectiveTool() === 'eraser' && panPointerId === null && pointers.size < 2;
   eraserCursor.hidden = !show;
   if (show) {
-    eraserCursor.style.transform =
-      `translate(${event.clientX - ERASER_RADIUS}px, ${event.clientY - ERASER_RADIUS}px)`;
+    cursorPos = [event.clientX, event.clientY];
+    placeEraserCursor();
   }
 }
+
+// ---------- Seletor de tamanho ----------
+const sizeBtn = document.getElementById('tool-size');
+const sizeDot = document.getElementById('size-dot');
+const sizePopover = document.getElementById('size-popover');
+const sizeOptions = [...sizePopover.querySelectorAll('button')];
+const SIZE_NAMES = { chalk: 'do giz', eraser: 'do apagador' };
+const DOT_PX = [5, 9, 14, 19, 25]; // diâmetro das bolinhas de pré-visualização (px)
+
+function setSizeOpen(open) {
+  open = open && tool !== 'hand';
+  sizePopover.hidden = !open;
+  sizeBtn.setAttribute('aria-expanded', String(open));
+  if (open) {
+    (sizeOptions[sizeIndex[tool]] || sizeOptions[0]).focus();
+  }
+}
+
+function updateSizeUI() {
+  const hand = tool === 'hand';
+  sizeBtn.disabled = hand;
+  if (hand) setSizeOpen(false);
+  const name = hand ? 'chalk' : tool;
+  const i = sizeIndex[name];
+  sizeDot.style.width = sizeDot.style.height = DOT_PX[i] + 'px';
+  sizeBtn.setAttribute('aria-label', hand ? 'Tamanho (indisponível com a mão)' : `Tamanho ${SIZE_NAMES[name]}`);
+  sizeBtn.title = hand ? 'Tamanho (escolha giz ou apagador)' : `Tamanho ${SIZE_NAMES[name]}`;
+  sizePopover.setAttribute('aria-label', `Tamanho ${SIZE_NAMES[name]}`);
+  sizeOptions.forEach((b, k) => b.setAttribute('aria-checked', String(k === i)));
+  placeEraserCursor();
+}
+
+function chooseSize(i) {
+  if (tool === 'hand') return;
+  sizeIndex[tool] = i;
+  saveSizes();
+  updateSizeUI();
+  setSizeOpen(false);
+  sizeBtn.focus();
+}
+
+sizeOptions.forEach((b, i) => {
+  b.firstElementChild.style.width = b.firstElementChild.style.height = DOT_PX[i] + 'px';
+  b.setAttribute('aria-label', `Tamanho ${i + 1} de ${sizeOptions.length}`);
+  b.addEventListener('click', () => chooseSize(i));
+});
+sizeBtn.addEventListener('click', () => setSizeOpen(sizePopover.hidden));
+sizePopover.addEventListener('keydown', (event) => {
+  const i = sizeOptions.indexOf(document.activeElement);
+  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+  if (step && i >= 0) {
+    event.preventDefault();
+    sizeOptions[(i + step + sizeOptions.length) % sizeOptions.length].focus();
+  }
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !sizePopover.hidden) {
+    setSizeOpen(false);
+    sizeBtn.focus();
+  }
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!sizePopover.hidden && !sizePopover.contains(event.target) && !sizeBtn.contains(event.target)) {
+    setSizeOpen(false);
+  }
+});
 canvas.addEventListener('pointerleave', () => { if (pointers.size === 0) eraserCursor.hidden = true; });
 
 window.addEventListener('keydown', (event) => {
   if (event.code === 'Space') {
-    if (event.target.closest && event.target.closest('#link-prompt')) return; // espaço aciona o botão focado
+    if (event.target.closest && event.target.closest('#link-prompt, #size-popover')) return; // espaço aciona o botão focado
     spaceDown = true;
     event.preventDefault(); // evita "clicar" no botão focado
     updateCursor();
@@ -323,7 +433,7 @@ function gestureState() {
 // ---------- Apagador ----------
 // Corta `pts` removendo o que fica dentro do círculo (cx, cy, r), considerando também
 // o trecho entre pontos: interpola a entrada/saída em cada segmento. Devolve a lista de pedaços.
-function cutPoints(pts, cx, cy, r) {
+function cutPoints(pts, cx, cy, r) { // r já inclui metade da espessura do traço
   const r2 = r * r;
   const pieces = [];
   const p0 = pts[0];
@@ -403,18 +513,19 @@ function strokeBounds(stroke) {
 
 function eraseCircle(cx, cy, r) {
   let changed = false;
-  const r2 = r * r;
   for (let i = strokes.length - 1; i >= 0; i--) {
     const stroke = strokes[i];
+    // Raio efetivo: o traço ocupa metade da sua espessura de cada lado da linha de pontos.
+    const rs = r + (stroke.width ?? CHALK_WIDTH) / 2;
     const [x0, y0, x1, y1] = strokeBounds(stroke);
-    if (cx + r < x0 || cx - r > x1 || cy + r < y0 || cy - r > y1) continue;
+    if (cx + rs < x0 || cx - rs > x1 || cy + rs < y0 || cy - rs > y1) continue;
     const pts = stroke.points;
-    if (!touchesCircle(pts, cx, cy, r2)) continue;
-    const pieces = cutPoints(pts, cx, cy, r);
+    if (!touchesCircle(pts, cx, cy, rs * rs)) continue;
+    const pieces = cutPoints(pts, cx, cy, rs);
     // Caso tangente: toca o círculo mas nada é removido; mantém o traço como está.
     if (pieces.length === 1 && pieces[0].length === pts.length &&
         pieces[0][0] === pts[0] && pieces[0][pts.length - 1] === pts[pts.length - 1]) continue;
-    strokes.splice(i, 1, ...pieces.map((points) => ({ points })));
+    strokes.splice(i, 1, ...pieces.map((points) => ({ points, width: stroke.width })));
     changed = true;
   }
   return changed;
@@ -423,7 +534,7 @@ function eraseCircle(cx, cy, r) {
 // Varre o círculo de `a` até `b` (mundo) em passos de meio raio, para que um movimento
 // rápido não "pule" traços entre dois eventos. Devolve true se algo mudou.
 function eraseSweep(a, b) {
-  const r = ERASER_RADIUS / camera.scale;
+  const r = eraserRadius() / camera.scale;
   const dist = Math.hypot(b[0] - a[0], b[1] - a[1]);
   const n = Math.min(2000, Math.max(1, Math.ceil(dist / (r / 2))));
   let changed = false;
@@ -482,7 +593,7 @@ canvas.addEventListener('pointerdown', (event) => {
   }
 
   strokePointerId = event.pointerId;
-  currentStroke = { points: [pointerPosition(event)] };
+  currentStroke = { points: [pointerPosition(event)], width: chalkWidth() };
   strokes.push(currentStroke);
   render();
 });
@@ -570,6 +681,7 @@ document.getElementById('clear').addEventListener('click', () => {
 // ---------- Compartilhar via URL (#d=...) ----------
 // Formato: "#d=" + flag + base64url. Flag "z" = JSON comprimido com deflate-raw;
 // flag "r" = JSON puro. JSON: {"v":1,"c":[x*10,y*10,escala*1000],"s":[[x0,y0,dx,dy,...],...]}
+// e, opcional, "w":[espessura*10 por traço] (ausente = espessura padrão)
 // com pontos em décimos de unidade de mundo (inteiros) e deltas após o primeiro ponto.
 const HASH_PREFIX = '#d=';
 const MAX_URL_LENGTH = 8000;
@@ -631,12 +743,15 @@ async function encodeBoard(state = { strokes, camera }) {
     }
     return out;
   });
-  const cam = state.camera;
-  const json = JSON.stringify({
+  // Espessuras (décimos de unidade de mundo), só quando algum traço foge do padrão.
+  const w = state.strokes.map((stroke) => Math.round((stroke.width ?? CHALK_WIDTH) * Q));
+  const obj = {
     v: 1,
-    c: [Math.round(cam.x * Q), Math.round(cam.y * Q), Math.round(cam.scale * 1000)],
+    c: [Math.round(state.camera.x * Q), Math.round(state.camera.y * Q), Math.round(state.camera.scale * 1000)],
     s,
-  });
+  };
+  if (w.some((n) => n !== CHALK_WIDTH * Q)) obj.w = w;
+  const json = JSON.stringify(obj);
   let bytes = new TextEncoder().encode(json);
   let flag = 'r';
   if (typeof CompressionStream === 'function') {
@@ -665,6 +780,12 @@ async function decodeBoard(text) {
     const [cx, cy, cs] = data.c;
     if (![cx, cy, cs].every(isInt) || cs <= 0) return null;
     if (data.s.length > MAX_STROKES || Math.abs(cx) > MAX_COORD || Math.abs(cy) > MAX_COORD) return null;
+    // "w" é opcional (links antigos não têm): um inteiro por traço, em décimos de unidade de mundo.
+    const w = data.w;
+    if (w !== undefined) {
+      if (!Array.isArray(w) || w.length !== data.s.length) return null;
+      if (!w.every((n) => isInt(n) && n >= MIN_WIDTH * Q && n <= MAX_WIDTH * Q)) return null;
+    }
     const result = [];
     let totalPoints = 0;
     for (const flat of data.s) {
@@ -681,7 +802,7 @@ async function decodeBoard(text) {
         if (Math.abs(x) > MAX_COORD || Math.abs(y) > MAX_COORD) return null;
         points.push([x / Q, y / Q]);
       }
-      result.push({ points });
+      result.push({ points, width: w ? w[result.length] / Q : CHALK_WIDTH });
     }
     return deserialize({
       strokes: result,
@@ -810,6 +931,8 @@ window.addEventListener('hashchange', loadFromHash);
 
 window.addEventListener('resize', resize);
 loadFromStorage();
+loadSizes();
+updateSizeUI();
 updateCursor();
 resize();
 loadFromHash();

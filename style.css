@@ -173,6 +173,60 @@ html, body {
   stroke-linejoin: round;
 }
 
+#tools button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#size-dot,
+#size-popover span {
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+#size-popover {
+  position: fixed;
+  top: 180px; /* alinhado ao botão de tamanho (4º da barra: 12 + 3 * (48 + 8)) */
+  left: 72px;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 10px;
+}
+
+#size-popover[hidden] {
+  display: none;
+}
+
+#size-popover button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  color: #f4f4ef;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 8px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+#size-popover button[aria-checked="true"] {
+  color: #1d3d2d;
+  background: #f4f4ef;
+  border-color: #fff;
+}
+
+#size-popover button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
 #eraser-cursor {
   position: fixed;
   top: 0;
