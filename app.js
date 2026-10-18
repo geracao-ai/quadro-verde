@@ -263,6 +263,7 @@ function discardCurrentStroke() {
   if (i >= 0) strokes.splice(i, 1);
   currentStroke = null;
   strokePointerId = null;
+  scheduleSave(); // o autosave pode ter salvo o traço parcial antes do descarte
 }
 
 function gestureState() {
@@ -357,6 +358,172 @@ document.getElementById('clear').addEventListener('click', () => {
   render();
 });
 
+// ---------- Compartilhar via URL (#d=...) ----------
+// Formato: "#d=" + flag + base64url. Flag "z" = JSON comprimido com deflate-raw;
+// flag "r" = JSON puro. JSON: {"v":1,"c":[x*10,y*10,escala*1000],"s":[[x0,y0,dx,dy,...],...]}
+// com pontos em décimos de unidade de mundo (inteiros) e deltas após o primeiro ponto.
+const HASH_PREFIX = '#d=';
+const MAX_URL_LENGTH = 8000;
+const MAX_DECODED_BYTES = 20 * 1024 * 1024;
+const Q = 10;
+
+const isInt = (n) => Number.isInteger(n) && Math.abs(n) < 1e9;
+
+function toBase64Url(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function fromBase64Url(text) {
+  if (!/^[A-Za-z0-9_-]*$/.test(text)) throw new Error('base64url inválido');
+  const bin = atob(text.replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+}
+
+async function pipeBytes(bytes, transform) {
+  const stream = new Blob([bytes]).stream().pipeThrough(transform);
+  const reader = stream.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > MAX_DECODED_BYTES) {
+      await reader.cancel();
+      throw new Error('dados grandes demais');
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.length; }
+  return out;
+}
+
+// Estado -> texto do hash (sem o "#d="). Pontos quantizados e codificados por deltas.
+async function encodeBoard(state = { strokes, camera }) {
+  const s = state.strokes.map((stroke) => {
+    const out = [];
+    let px = 0;
+    let py = 0;
+    for (const [x, y] of stroke.points) {
+      const qx = Math.round(x * Q);
+      const qy = Math.round(y * Q);
+      out.push(qx - px, qy - py);
+      px = qx;
+      py = qy;
+    }
+    return out;
+  });
+  const cam = state.camera;
+  const json = JSON.stringify({
+    v: 1,
+    c: [Math.round(cam.x * Q), Math.round(cam.y * Q), Math.round(cam.scale * 1000)],
+    s,
+  });
+  let bytes = new TextEncoder().encode(json);
+  let flag = 'r';
+  if (typeof CompressionStream === 'function') {
+    try {
+      bytes = await pipeBytes(bytes, new CompressionStream('deflate-raw'));
+      flag = 'z';
+    } catch (e) { /* segue sem compressão */ }
+  }
+  return flag + toBase64Url(bytes);
+}
+
+// Texto do hash -> { strokes, camera }, ou null se inválido (nunca lança).
+async function decodeBoard(text) {
+  try {
+    if (typeof text !== 'string' || text.length < 1) return null;
+    let bytes = fromBase64Url(text.slice(1));
+    if (text[0] === 'z') {
+      if (typeof DecompressionStream !== 'function') return null;
+      bytes = await pipeBytes(bytes, new DecompressionStream('deflate-raw'));
+    } else if (text[0] !== 'r') {
+      return null;
+    }
+    const data = JSON.parse(new TextDecoder().decode(bytes));
+    if (!data || data.v !== 1 || !Array.isArray(data.s) || !Array.isArray(data.c)) return null;
+    const [cx, cy, cs] = data.c;
+    if (![cx, cy, cs].every(isInt) || cs <= 0) return null;
+    const result = [];
+    for (const flat of data.s) {
+      if (!Array.isArray(flat) || flat.length === 0 || flat.length % 2 !== 0) return null;
+      const points = [];
+      let x = 0;
+      let y = 0;
+      for (let i = 0; i < flat.length; i += 2) {
+        if (!isInt(flat[i]) || !isInt(flat[i + 1])) return null;
+        x += flat[i];
+        y += flat[i + 1];
+        points.push([x / Q, y / Q]);
+      }
+      result.push({ points });
+    }
+    return deserialize({
+      strokes: result,
+      camera: { x: cx / Q, y: cy / Q, scale: cs / 1000 },
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
+let toastTimer = null;
+const toastEl = document.getElementById('toast');
+function showToast(message, ms = 4000) {
+  toastEl.textContent = message;
+  toastEl.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toastEl.hidden = true; }, ms);
+}
+
+async function shareBoard() {
+  const url = location.origin + location.pathname + HASH_PREFIX + await encodeBoard();
+  const warning = url.length > MAX_URL_LENGTH
+    ? `Atenção: o link tem ${url.length} caracteres e pode não funcionar em alguns apps/navegadores. `
+    : '';
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast(warning + 'Link copiado!', warning ? 8000 : 4000);
+  } catch (e) {
+    prompt(warning + 'Copie o link abaixo:', url);
+  }
+}
+document.getElementById('share').addEventListener('click', shareBoard);
+
+// Carrega o quadro do hash (se houver). Tem prioridade sobre o localStorage.
+async function loadFromHash() {
+  if (!location.hash.startsWith(HASH_PREFIX)) return;
+  const payload = location.hash.slice(HASH_PREFIX.length);
+  const state = await decodeBoard(payload);
+  // Limpa o hash em qualquer caso, para um reload não repetir a pergunta.
+  history.replaceState(null, '', location.pathname + location.search);
+  if (!state) {
+    showToast('O link do quadro é inválido ou está incompleto.');
+    return;
+  }
+  if (strokes.length > 0) {
+    const same = await encodeBoard({ strokes, camera: state.camera }) ===
+      await encodeBoard({ strokes: state.strokes, camera: state.camera });
+    if (!same && !confirm('Este link contém outro quadro. Substituir o quadro atual pelo do link?')) return;
+  }
+  discardCurrentStroke();
+  strokes.length = 0;
+  strokes.push(...state.strokes);
+  Object.assign(camera, state.camera);
+  render();
+  flushSave();
+  saveToStorage();
+}
+window.addEventListener('hashchange', loadFromHash);
+
 window.addEventListener('resize', resize);
 loadFromStorage();
 resize();
+loadFromHash();

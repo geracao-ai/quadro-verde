@@ -14,10 +14,15 @@ html, body {
   cursor: crosshair;
 }
 
-#clear {
+#actions {
   position: fixed;
   top: 12px;
   right: 12px;
+  display: flex;
+  gap: 6px;
+}
+
+#actions button {
   padding: 8px 16px;
   font: 600 16px sans-serif;
   color: #f4f4ef;
@@ -27,7 +32,7 @@ html, body {
   cursor: pointer;
 }
 
-#clear:active {
+#actions button:active {
   background: rgba(0, 0, 0, 0.55);
 }
 
@@ -56,4 +61,21 @@ html, body {
 #controls button[aria-pressed="true"] {
   background: rgba(0, 0, 0, 0.6);
   border-color: #fff;
+}
+
+#toast {
+  position: fixed;
+  top: 64px;
+  right: 12px;
+  max-width: min(360px, calc(100vw - 24px));
+  padding: 8px 12px;
+  font: 500 14px sans-serif;
+  color: #f4f4ef;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+}
+
+#toast[hidden] {
+  display: none;
 }
