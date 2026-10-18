@@ -9,6 +9,12 @@
 <body>
   <canvas id="board"></canvas>
   <button id="clear" type="button">Limpar</button>
+  <div id="controls" role="group" aria-label="Zoom e navegação">
+    <button id="hand" type="button" aria-label="Modo mover" aria-pressed="false" title="Mover (ou espaço + arrastar)">&#9995;</button>
+    <button id="zoom-out" type="button" aria-label="Diminuir zoom" title="Diminuir zoom">&minus;</button>
+    <button id="zoom-reset" type="button" aria-label="Zoom 100%" title="Zoom 100%">100%</button>
+    <button id="zoom-in" type="button" aria-label="Aumentar zoom" title="Aumentar zoom">+</button>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>
