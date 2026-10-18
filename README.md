@@ -12,7 +12,7 @@ Um quadro verde para desenhar a giz, feito só com HTML, CSS e JavaScript puro (
 - **Limpar:** botão "Limpar" (pede confirmação). Apaga também o que está salvo.
 - **Salvar:** automático no `localStorage` do navegador; ao reabrir a página o desenho volta.
 - **Compartilhar:** botão "Compartilhar" copia um link com o desenho dentro. Se a área de transferência não estiver disponível, o link aparece numa caixa para você copiar. Se o link passar de ~8000 caracteres, o app avisa que ele pode não funcionar em alguns apps ou navegadores.
-- **Abrir um link compartilhado:** o quadro é carregado a partir do link (tem prioridade sobre o salvo localmente). Se já existir um desenho local diferente, o app pergunta antes de substituí-lo; se você cancelar, o quadro local é mantido. Links inválidos ou truncados são ignorados com um aviso.
+- **Abrir um link compartilhado:** o quadro é carregado a partir do link (tem prioridade sobre o salvo localmente). Se o quadro local estiver vazio ou for idêntico ao do link, nada é perguntado. Se já existir um desenho local diferente, aparece um aviso na própria página (sem `confirm()`, que alguns navegadores embutidos bloqueiam) com os botões "Abrir quadro do link" e "Manter o meu" (Esc também mantém). O link fica na barra de endereço até você decidir; ao manter o seu quadro, um aviso informa que o do link foi ignorado. Links inválidos ou truncados são ignorados com um aviso.
 
 ## Como rodar
 
