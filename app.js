@@ -15,6 +15,83 @@ let currentStroke = null;
 // ---------- Câmera (x, y = canto superior esquerdo em coordenadas de mundo) ----------
 const camera = { x: 0, y: 0, scale: 1 };
 
+// ---------- Persistência (localStorage) ----------
+const STORAGE_KEY = 'quadro-verde:v1';
+const SAVE_DELAY_MS = 300;
+
+// Converte o estado em um objeto JSON-serializável.
+function serialize() {
+  return {
+    strokes: strokes.map((s) => ({ points: s.points.map(([x, y]) => [x, y]) })),
+    camera: { x: camera.x, y: camera.y, scale: camera.scale },
+  };
+}
+
+const isNum = (n) => typeof n === 'number' && Number.isFinite(n);
+
+// Valida o formato; devolve { strokes, camera } ou null se inválido.
+function deserialize(data) {
+  if (!data || typeof data !== 'object' || !Array.isArray(data.strokes)) return null;
+  const c = data.camera;
+  if (!c || !isNum(c.x) || !isNum(c.y) || !isNum(c.scale) || c.scale <= 0) return null;
+  const result = [];
+  for (const s of data.strokes) {
+    if (!s || !Array.isArray(s.points) || s.points.length === 0) return null;
+    for (const p of s.points) {
+      if (!Array.isArray(p) || p.length !== 2 || !isNum(p[0]) || !isNum(p[1])) return null;
+    }
+    result.push({ points: s.points.map(([x, y]) => [x, y]) });
+  }
+  return {
+    strokes: result,
+    camera: { x: c.x, y: c.y, scale: Math.min(MAX_SCALE, Math.max(MIN_SCALE, c.scale)) },
+  };
+}
+
+function saveToStorage() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serialize()));
+  } catch (e) { /* localStorage indisponível ou cheio: segue sem salvar */ }
+}
+
+function clearStorage() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (e) { /* ignora */ }
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const state = deserialize(JSON.parse(raw));
+    if (!state) return;
+    strokes.push(...state.strokes);
+    Object.assign(camera, state.camera);
+  } catch (e) { /* JSON inválido ou localStorage indisponível: começa vazio */ }
+}
+
+let saveTimer = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveToStorage();
+  }, SAVE_DELAY_MS);
+}
+
+// Grava já o que estiver pendente (a página pode estar sendo fechada).
+function flushSave() {
+  if (saveTimer === null) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  saveToStorage();
+}
+window.addEventListener('pagehide', flushSave);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushSave();
+});
+
 function worldToScreen([x, y]) {
   return [(x - camera.x) * camera.scale, (y - camera.y) * camera.scale];
 }
@@ -115,6 +192,7 @@ function panBy(dxScreen, dyScreen) {
 function setScaleAtCenter(factor) {
   zoomAt(window.innerWidth / 2, window.innerHeight / 2, factor);
   render();
+  scheduleSave();
 }
 
 document.getElementById('zoom-in').addEventListener('click', () => setScaleAtCenter(BUTTON_ZOOM));
@@ -166,6 +244,7 @@ canvas.addEventListener('wheel', (event) => {
   const k = event.ctrlKey ? 0.01 : 0.0015;
   zoomAt(event.clientX, event.clientY, Math.exp(-event.deltaY * unit * k));
   render();
+  scheduleSave();
 }, { passive: false });
 
 // ---------- Handlers de pointer (rastreados por pointerId) ----------
@@ -237,9 +316,11 @@ canvas.addEventListener('pointermove', (event) => {
     zoomAt(g.cx, g.cy, g.dist / gesture.dist);
     gesture = g;
     render();
+    scheduleSave();
   } else if (event.pointerId === panPointerId) {
     panBy(p.x - prevX, p.y - prevY);
     render();
+    scheduleSave();
   } else if (event.pointerId === strokePointerId && currentStroke) {
     // getCoalescedEvents devolve os pontos intermediários, deixando o traço mais fiel.
     const events = event.getCoalescedEvents ? event.getCoalescedEvents() : [];
@@ -255,6 +336,7 @@ function endPointer(event) {
   if (event.pointerId === strokePointerId) {
     currentStroke = null;
     strokePointerId = null;
+    scheduleSave(); // traços descartados pela pinça já saíram de `strokes`
   }
   if (event.pointerId === panPointerId) panPointerId = null;
   gesture = pointers.size === 2 ? gestureState() : null;
@@ -265,11 +347,16 @@ canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 
 document.getElementById('clear').addEventListener('click', () => {
+  if (strokes.length > 0 && !confirm('Limpar o quadro? Isso apaga o que está desenhado e salvo.')) return;
   strokes.length = 0;
   currentStroke = null;
   strokePointerId = null;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  clearStorage();
   render();
 });
 
 window.addEventListener('resize', resize);
+loadFromStorage();
 resize();
