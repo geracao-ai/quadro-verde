@@ -1,5 +1,7 @@
 # Quadro Verde
 
+https://geracao-ai.github.io/quadro-verde
+
 Um quadro verde para desenhar a giz, feito só com HTML, CSS e JavaScript puro (sem build e sem dependências). Funciona com mouse, toque e caneta, e o desenho pode ser compartilhado por link.
 
 ## Como usar
