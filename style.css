@@ -126,3 +126,64 @@ html, body {
   outline: 2px solid #fff;
   outline-offset: 2px;
 }
+
+#tools {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#tools button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  color: #f4f4ef;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 10px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+#tools button[aria-pressed="true"] {
+  color: #1d3d2d;
+  background: #f4f4ef;
+  border-color: #fff;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.35);
+}
+
+#tools button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
+#tools svg {
+  width: 28px;
+  height: 28px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#eraser-cursor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+
+#eraser-cursor[hidden] {
+  display: none;
+}
