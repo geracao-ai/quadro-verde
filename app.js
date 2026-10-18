@@ -295,6 +295,7 @@ let strokePointerId = null; // ponteiro que desenha o traço atual
 let panPointerId = null;    // ponteiro que faz pan de 1 dedo/mouse
 let eraserPointerId = null; // ponteiro que está apagando
 let eraserLast = null;      // última posição do apagador (mundo)
+let eraserSnapshot = null;  // cópia de `strokes` no início do apagar (para desfazer na pinça)
 let gesture = null;         // { cx, cy, dist } durante pinça/pan com 2 ponteiros
 
 function pointerPosition(event) {
@@ -385,14 +386,35 @@ function touchesCircle(pts, cx, cy, r2) {
   return false;
 }
 
+// Caixa delimitadora do traço, em cache (invalidada quando o giz acrescenta pontos).
+function strokeBounds(stroke) {
+  if (!stroke.bbox) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of stroke.points) {
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+    stroke.bbox = [x0, y0, x1, y1];
+  }
+  return stroke.bbox;
+}
+
 function eraseCircle(cx, cy, r) {
   let changed = false;
   const r2 = r * r;
   for (let i = strokes.length - 1; i >= 0; i--) {
-    const pts = strokes[i].points;
+    const stroke = strokes[i];
+    const [x0, y0, x1, y1] = strokeBounds(stroke);
+    if (cx + r < x0 || cx - r > x1 || cy + r < y0 || cy - r > y1) continue;
+    const pts = stroke.points;
     if (!touchesCircle(pts, cx, cy, r2)) continue;
-    const pieces = cutPoints(pts, cx, cy, r).map((points) => ({ points }));
-    strokes.splice(i, 1, ...pieces);
+    const pieces = cutPoints(pts, cx, cy, r);
+    // Caso tangente: toca o círculo mas nada é removido; mantém o traço como está.
+    if (pieces.length === 1 && pieces[0].length === pts.length &&
+        pieces[0][0] === pts[0] && pieces[0][pts.length - 1] === pts[pts.length - 1]) continue;
+    strokes.splice(i, 1, ...pieces.map((points) => ({ points })));
     changed = true;
   }
   return changed;
@@ -420,9 +442,16 @@ canvas.addEventListener('pointerdown', (event) => {
 
   if (pointers.size >= 2) {
     // Segundo dedo: vira pinça/pan e o traço de 1 dedo é descartado sem deixar rabisco.
-    // Apagamentos já feitos antes da pinça permanecem (como um traço parcial de apagador);
-    // daqui em diante nenhum dedo apaga até todos serem levantados.
+    // Como o traço parcial do giz, o apagar em andamento é desfeito: os traços são sempre
+    // substituídos (nunca mutados), então basta restaurar a cópia feita no pointerdown.
+    // Daqui em diante nenhum dedo apaga até todos serem levantados.
     discardCurrentStroke();
+    if (eraserPointerId !== null && eraserSnapshot) {
+      strokes.length = 0;
+      strokes.push(...eraserSnapshot);
+      scheduleSave();
+    }
+    eraserSnapshot = null;
     eraserPointerId = null;
     eraserLast = null;
     panPointerId = null;
@@ -443,6 +472,7 @@ canvas.addEventListener('pointerdown', (event) => {
   if (active === 'eraser') {
     eraserPointerId = event.pointerId;
     eraserLast = pointerPosition(event);
+    eraserSnapshot = strokes.slice();
     moveEraserCursor(event);
     if (eraseSweep(eraserLast, eraserLast)) {
       render();
@@ -498,6 +528,7 @@ canvas.addEventListener('pointermove', (event) => {
     for (const e of events.length ? events : [event]) {
       currentStroke.points.push(pointerPosition(e));
     }
+    delete currentStroke.bbox;
     render();
   }
 });
@@ -513,6 +544,7 @@ function endPointer(event) {
   if (event.pointerId === eraserPointerId) {
     eraserPointerId = null;
     eraserLast = null;
+    eraserSnapshot = null; // apagar concluído: não há mais o que desfazer
   }
   if (event.pointerType !== 'mouse' || pointers.size > 0) eraserCursor.hidden = true;
   gesture = pointers.size === 2 ? gestureState() : null;
@@ -528,6 +560,7 @@ document.getElementById('clear').addEventListener('click', () => {
   currentStroke = null;
   strokePointerId = null;
   eraserPointerId = null;
+  eraserSnapshot = null;
   clearTimeout(saveTimer);
   saveTimer = null;
   clearStorage();
