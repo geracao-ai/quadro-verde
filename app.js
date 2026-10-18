@@ -718,6 +718,10 @@ document.getElementById('share').addEventListener('click', shareBoard);
 // Aplica um quadro decodificado, substituindo o atual, e salva já.
 function applyBoard(state) {
   discardCurrentStroke();
+  // Um apagar em andamento pertencia ao quadro antigo: não pode ser desfeito sobre o novo.
+  eraserSnapshot = null;
+  eraserPointerId = null;
+  eraserLast = null;
   strokes.length = 0;
   strokes.push(...state.strokes);
   Object.assign(camera, state.camera);
